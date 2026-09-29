@@ -6,7 +6,8 @@
 (function () {
   'use strict';
 
-  var CSV_URL = '../../AIL-Trade Data-2023-2026-new.csv';
+  var CSV_URL = './AIL-Trade Data-2023-2026-new.csv';
+  var CSV_URL_FALLBACK = '../../AIL-Trade Data-2023-2026-new.csv';
   var CSV_FILE = 'AIL-Trade Data-2023-2026-new.csv';
   var UPLOAD_URL = '/__upload';
   var GEOJSON_URL = 'bangladesh-districts.geojson';
@@ -69,6 +70,12 @@
       .then(function (response) {
         if (!response.ok) { throw new Error('Could not load local CSV (' + response.status + ').'); }
         return response.text();
+      })
+      .catch(function () {
+        return fetch(CSV_URL_FALLBACK + '?t=' + Date.now(), { cache: 'no-store' }).then(function (response) {
+          if (!response.ok) { throw new Error('Could not load CSV (' + response.status + ').'); }
+          return response.text();
+        });
       })
       .then(function (text) {
         if (!text || !text.trim()) { throw new Error('The CSV file is empty: ' + CSV_URL); }
