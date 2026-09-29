@@ -1,2 +1,5 @@
 .playwright-mcp/
 *.log
+.vercel
+.env*
+.vercel/

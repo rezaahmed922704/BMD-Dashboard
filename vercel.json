@@ -1,7 +1,6 @@
 {
   "buildCommand": "",
   "outputDirectory": "apps-script-dashboard-demo",
-  "cleanUrls": true,
   "rewrites": [
     { "source": "/", "destination": "/Index.preview.html" }
   ]
