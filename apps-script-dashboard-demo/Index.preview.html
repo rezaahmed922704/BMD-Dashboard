@@ -226,6 +226,7 @@
           <label class="filter-item"><span>To year</span><select id="yearFilter" onchange="onPeriodChange()" aria-label="To year"></select></label>
           <label class="filter-item"><span>Month</span><select id="monthFilter" onchange="render()" aria-label="Month"></select></label>
           <label class="filter-item"><span>Zone</span><select id="zoneFilter" onchange="onPeriodChange()" aria-label="Zone"></select></label>
+          <label class="filter-item"><span>Division</span><select id="divisionFilter" onchange="onPeriodChange()" aria-label="Division"></select></label>
           <label class="filter-item"><span>Search districts</span><input id="searchBox" type="search" placeholder="Search district" oninput="render()"></label>
         </div>
       </div>
@@ -373,7 +374,7 @@
     };
     let state = { rows: [], years: [], selected: null, scopeDistrict: null, map: null, geoLayer: null, geoJson: null, geoJsonLoading: false, geoJsonFailed: false, csvText: '', csvReading: false, csvUploading: false, dealerTooltipCache: {} };
 
-    window.addEventListener('load', () => { initLogo(); loadData(); });
+    window.addEventListener('load', () => { initLogo(); loadDivisionData(); loadData(); });
 
     let chartResizeTimer = null;
     window.addEventListener('resize', () => {
@@ -434,7 +435,8 @@
       hideError();
       google.script.run
         .withSuccessHandler(data => {
-          state.rows = data.rows || [];
+          state.allRows = data.rows || [];
+          applyRowFilters();
           state.years = data.years || [];
           populatePeriodFilters(data.defaultYear, data.defaultMonth);
           populateZoneFilter();
@@ -559,12 +561,104 @@
     }
 
     function populateZoneFilter() {
-      const zones = [...new Set(state.rows.map(row => row.zone || 'All Zones'))].filter(zone => zone !== 'All Zones').sort();
+      const zones = [...new Set((state.allRows || state.rows).map(row => row.zone || 'All Zones'))].filter(zone => zone !== 'All Zones').sort();
       document.getElementById('zoneFilter').innerHTML = '<option value="">All Zones</option>' + zones.map(zone => `<option value="${escapeAttr(zone)}">${escapeHtml(zone)}</option>`).join('');
+    }
+
+    const BD_DIVISION_DISTRICTS = {
+      'Barisal': ['Barguna', 'Barisal', 'Bhola', 'Jhalakathi', 'Patuakhali', 'Pirojpur'],
+      'Chattagram': ['Bandarban', 'Brahmanbaria', 'Chandpur', 'Chattogram', 'Comilla', 'Coxsbazar', 'Feni', 'Khagrachhari', 'Lakshmipur', 'Noakhali', 'Rangamati'],
+      'Dhaka': ['Dhaka', 'Faridpur', 'Gazipur', 'Gopalganj', 'Kishoreganj', 'Madaripur', 'Manikganj', 'Munshiganj', 'Narayanganj', 'Narsingdi', 'Rajbari', 'Shariatpur', 'Tangail'],
+      'Khulna': ['Bagerhat', 'Chuadanga', 'Jashore', 'Jhenaidah', 'Khulna', 'Kushtia', 'Magura', 'Meherpur', 'Narail', 'Satkhira'],
+      'Mymensingh': ['Jamalpur', 'Mymensingh', 'Netrokona', 'Sherpur'],
+      'Rajshahi': ['Bogura', 'Chapainawabganj', 'Joypurhat', 'Naogaon', 'Natore', 'Pabna', 'Rajshahi', 'Sirajganj'],
+      'Rangpur': ['Dinajpur', 'Gaibandha', 'Kurigram', 'Lalmonirhat', 'Nilphamari', 'Panchagarh', 'Rangpur', 'Thakurgaon'],
+      'Sylhet': ['Habiganj', 'Moulvibazar', 'Sunamganj', 'Sylhet']
+    };
+    const BD_PLACE_ALIASES = { barishal: 'barisal', cumilla: 'comilla', jhalokati: 'jhalakathi' };
+    let bdDivisionIndex = null;
+
+    function bdPlaceKey(name) {
+      const key = String(name || '').toLowerCase().replace(/[^a-z]/g, '');
+      return BD_PLACE_ALIASES[key] || key;
+    }
+
+    function bdDivisionMap() {
+      if (bdDivisionIndex) return bdDivisionIndex;
+      bdDivisionIndex = {};
+      Object.keys(BD_DIVISION_DISTRICTS).forEach(division => {
+        BD_DIVISION_DISTRICTS[division].forEach(district => {
+          bdDivisionIndex[bdPlaceKey(district)] = division;
+        });
+      });
+      return bdDivisionIndex;
+    }
+
+    function districtDivision(district) {
+      return bdDivisionMap()[bdPlaceKey(district)] || '';
+    }
+
+    function selectedDivision() {
+      const el = document.getElementById('divisionFilter');
+      return el ? el.value : '';
+    }
+
+    function applyRowFilters() {
+      const division = selectedDivision();
+      const rows = state.allRows || [];
+      state.rows = division ? rows.filter(row => districtDivision(row.district) === division) : rows;
+    }
+
+    function initDivisionFilter() {
+      const el = document.getElementById('divisionFilter');
+      if (!el) return;
+      const current = el.value;
+      const divisions = Object.keys(BD_DIVISION_DISTRICTS).sort();
+      el.innerHTML = '<option value="">All Divisions</option>' + divisions.map(name => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join('');
+      if (current && divisions.includes(current)) el.value = current;
+    }
+
+    function fetchGeo(path) {
+      return fetch('/api/geo/v2.0/' + path, { cache: 'no-store' }).then(res => {
+        if (!res.ok) throw new Error('proxy unavailable');
+        return res.json();
+      }).catch(error => {
+        if (/^(localhost|127\.)/.test(location.hostname)) throw error;
+        return fetch('https://bdapis.vercel.app/geo/v2.0/' + path).then(res => {
+          if (!res.ok) throw new Error('direct fetch failed');
+          return res.json();
+        });
+      });
+    }
+
+    function loadDivisionData() {
+      initDivisionFilter();
+      Promise.all([fetchGeo('divisions'), fetchGeo('districts')]).then(([divResult, districtResult]) => {
+        const divisions = Array.isArray(divResult.data) ? divResult.data : [];
+        const districts = Array.isArray(districtResult.data) ? districtResult.data : [];
+        if (!divisions.length || !districts.length) throw new Error('empty response');
+        const names = {};
+        divisions.forEach(item => { names[String(item.id)] = item.name; });
+        const groups = {};
+        districts.forEach(item => {
+          const division = names[String(item.division_id)];
+          if (division) (groups[division] = groups[division] || []).push(item.name);
+        });
+        if (Object.keys(groups).length < divisions.length) throw new Error('incomplete map');
+        Object.keys(BD_DIVISION_DISTRICTS).forEach(key => { delete BD_DIVISION_DISTRICTS[key]; });
+        Object.keys(groups).forEach(key => { BD_DIVISION_DISTRICTS[key] = [...new Set(groups[key])]; });
+        bdDivisionIndex = null;
+        initDivisionFilter();
+        if (document.getElementById('dashboard').style.display !== 'none') {
+          applyRowFilters();
+          render();
+        }
+      }).catch(() => { /* keep embedded fallback */ });
     }
 
     function onPeriodChange() {
       normalizeYearRange();
+      applyRowFilters();
       state.scopeDistrict = null;
       state.selected = topDistrictForPeriod() || state.selected;
       render();
@@ -1562,7 +1656,9 @@
       const year = selectedYear();
       const month = selectedMonth();
       const zone = selectedZone();
-      const statusRows = DISTRICT_NAMES.map(district => {
+      const statusDivision = selectedDivision();
+      const statusNames = DISTRICT_NAMES.filter(name => !statusDivision || districtDivision(name) === statusDivision);
+      const statusRows = statusNames.map(district => {
         const matched = state.rows.find(row => normalizeDistrict(row.district) === normalizeDistrict(district));
         const name = matched ? matched.district : district;
         const ytd = ytdSales(name, year, month, zone);
