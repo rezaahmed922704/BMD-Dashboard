@@ -126,7 +126,22 @@
     .chart-grid .section-title { font-size: 18px; }
     .chart-grid canvas { height: 220px; }
     .chart-grid .table-wrap { height: 220px; max-height: 220px; }
-    .dealer-comparison-grid, .dealer-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .monthly-overview-grid { grid-template-columns: 1fr 1fr 1.15fr; }
+    .monthly-overview-grid canvas { height: 400px; }
+    .monthly-matrix-scroll { height: 400px; overflow: auto; scrollbar-color: #8a98a3 #edf2f5; }
+    .monthly-matrix { min-width: 420px; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .monthly-matrix th, .monthly-matrix td { padding: 5px 7px; border: 1px solid var(--line); }
+    .monthly-matrix thead th { top: 0; background: #e1e9f7; color: var(--ink); z-index: 3; }
+    .monthly-matrix thead th:not(:first-child) { text-align: right; }
+    .monthly-matrix th:first-child { position: sticky; left: 0; z-index: 2; background: #f8fbfc; }
+    .monthly-matrix thead th:first-child { z-index: 4; background: #e1e9f7; }
+    .monthly-matrix td { text-align: right; }
+    .monthly-matrix .current-year { background: #f1f6fd; }
+    .monthly-matrix .compare-year { box-shadow: inset 2px 0 #8cafd1; }
+    .monthly-matrix tr.focus-month th, .monthly-matrix tr.focus-month td { background: #e8f6ec; font-weight: 800; }
+    .monthly-matrix tfoot th, .monthly-matrix tfoot td { position: sticky; bottom: 0; background: #e1e9f7; font-weight: 900; z-index: 3; }
+    .monthly-matrix tfoot th:first-child { z-index: 4; background: #e1e9f7; }
+    .dealer-comparison-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .dealer-comparison-grid .table-wrap { height: 430px; max-height: 430px; }
     .chart-scroll { overflow-x: auto; padding-bottom: 6px; scrollbar-color: #8a98a3 #edf2f5; }
     .chart-scroll canvas { min-width: 720px; }
@@ -307,7 +322,7 @@
         </aside>
       </div>
 
-      <div class="chart-grid">
+      <div class="chart-grid monthly-overview-grid">
         <div class="card panel">
           <div class="section-head"><h2 class="section-title">Monthly Sales Trend</h2><span id="trendLabel" class="zero scope-label" onclick="clearDistrictScope()" role="button" tabindex="0"></span></div>
           <div class="chart-scroll" tabindex="0" role="region" aria-label="Monthly Sales Trend — scroll horizontally"><canvas id="monthlyChart" height="220"></canvas></div>
@@ -317,12 +332,16 @@
           <div class="chart-scroll" tabindex="0" role="region" aria-label="Year-wise Monthly Growth — scroll horizontally"><canvas id="growthChart" height="220"></canvas></div>
         </div>
         <div class="card panel">
+          <div class="section-head"><h2 class="section-title">Monthly Sales by Year</h2><span id="monthMatrixLabel" class="zero"></span></div>
+          <div class="monthly-matrix-scroll" tabindex="0" role="region" aria-label="Monthly sales by year — scroll to see all months"><table id="monthMatrix" class="monthly-matrix" aria-label="Monthly sales by year"></table></div>
+        </div>
+      </div>
+      <div class="chart-grid dealer-summary-grid">
+        <div class="card panel">
           <div class="section-head"><h2 class="section-title">Zone Performance - MTD vs YTD</h2><span id="zoneChartLabel" class="zero"></span></div>
           <div class="group-legend" style="margin-bottom:6px"><span><i class="mtd"></i>MTD Sales</span><span><i class="ytd"></i>YTD Sales</span><span style="color:var(--muted)">label = growth %</span></div>
           <div class="chart-scroll" tabindex="0" role="region" aria-label="Zone Performance — scroll horizontally"><canvas id="zoneChart" height="220"></canvas></div>
         </div>
-      </div>
-      <div class="chart-grid dealer-summary-grid">
         <div class="card panel">
           <div class="section-head"><h2 class="section-title">MTD Top 10 Dealers – Sales Contribution</h2><span id="dealerChartLabel" class="zero"></span></div>
           <div class="chart-scroll" tabindex="0" role="region" aria-label="MTD Top 10 Dealers – Sales Contribution — scroll horizontally"><canvas id="dealerChart" height="220"></canvas></div>
@@ -714,9 +733,41 @@
       renderDetail();
       renderTable(rows);
       renderCharts(rows);
+      renderMonthlySalesMatrix(rows);
       renderZoneChart();
       renderDealerYearComparisons();
       renderInsightCharts(rows);
+    }
+
+    function renderMonthlySalesMatrix(rows) {
+      const year = selectedYear();
+      const month = selectedMonth();
+      const fromYear = selectedFromYear();
+      const zone = selectedZone();
+      const districts = state.scopeDistrict ? [state.scopeDistrict] : rows.map(row => row.district);
+      const years = state.years.filter(item => item <= year);
+      const columns = years.map(item => ({
+        year: item,
+        totals: monthlyTotals(item, districts, zone),
+        lastMonth: latestMonthWithData(item)
+      }));
+      const current = columns.find(item => item.year === year);
+      const comparison = columns.find(item => item.year === fromYear && item.year !== year);
+      const currentValue = current && month <= current.lastMonth ? `${taka(current.totals[month - 1])} MT` : 'No data';
+      const comparisonValue = comparison && month <= comparison.lastMonth ? `${taka(comparison.totals[month - 1])} → ` : '';
+      document.getElementById('monthMatrixLabel').textContent = `${MONTHS[month - 1]} ${comparisonValue}${currentValue}`;
+
+      const table = document.getElementById('monthMatrix');
+      const columnClass = item => item.year === year ? 'current-year' : item.year === fromYear ? 'compare-year' : '';
+      const head = `<thead><tr><th scope="col">Particulars</th>${columns.map(item => `<th scope="col" class="${columnClass(item)}">${item.year}</th>`).join('')}</tr></thead>`;
+      if (!districts.length || !columns.length) {
+        document.getElementById('monthMatrixLabel').textContent = 'No matching districts';
+        table.innerHTML = `${head}<tbody><tr><td colspan="${columns.length + 1}">No sales found for the current filters</td></tr></tbody>`;
+        return;
+      }
+      const body = MONTHS.map((label, index) => `<tr class="${index + 1 === month ? 'focus-month' : ''}"><th scope="row">${label}</th>${columns.map(item => `<td class="${columnClass(item)}" data-year="${item.year}" data-month="${index + 1}">${index < item.lastMonth ? taka(item.totals[index]) : ''}</td>`).join('')}</tr>`).join('');
+      const foot = `<tfoot><tr><th scope="row">Total</th>${columns.map(item => `<td class="${columnClass(item)}" data-total-year="${item.year}">${taka(item.totals.slice(0, item.lastMonth).reduce((sum, value) => sum + value, 0))}</td>`).join('')}</tr></tfoot>`;
+      table.innerHTML = `${head}<tbody>${body}</tbody>${foot}`;
     }
 
     function renderZoneChart() {
