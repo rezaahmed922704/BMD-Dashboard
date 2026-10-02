@@ -173,8 +173,17 @@
         '&mode=' + (replaceData ? 'replace' : 'append') + '&t=' + Date.now();
       return fetch(url, { method: 'POST', body: content, cache: 'no-store' })
         .then(function (response) {
+          var contentType = String(response.headers.get('content-type') || '');
+          if (!response.ok || contentType.indexOf('application/json') === -1) {
+            if (response.status === 404 || response.status === 405 || response.status === 501) {
+              throw new Error('CSV upload is only available on the local dashboard server. ' +
+                'Start it with start-dashboard.cmd, then upload again. ' +
+                '(Server returned ' + response.status + ' for ' + UPLOAD_URL + '.)');
+            }
+            throw new Error('Upload failed (' + response.status + ').');
+          }
           return response.json().then(function (payload) {
-            if (!response.ok || !payload.ok) {
+            if (!payload.ok) {
               throw new Error(payload && payload.error ? payload.error : 'Upload failed (' + response.status + ').');
             }
             return payload;

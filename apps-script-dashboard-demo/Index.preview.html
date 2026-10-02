@@ -913,9 +913,9 @@
       if (!state.map) {
         mapEl.innerHTML = '';
         state.map = L.map(mapEl, { zoomControl: true, scrollWheelZoom: false }).setView([23.8, 90.35], 7);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
-          attribution: '&copy; OpenStreetMap &copy; CARTO',
-          maxZoom: 11
+        L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+          attribution: '&copy; Esri &copy; OpenStreetMap contributors',
+          maxZoom: 15
         }).addTo(state.map);
       }
 
