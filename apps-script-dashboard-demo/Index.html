@@ -49,6 +49,7 @@
     .filter-panel .filter-item { gap: 3px; font-size: 10px; min-width: 0; }
     .filter-panel select, .filter-panel input { min-width: 110px; padding: 7px 10px; border-radius: 8px; font-size: 12px; }
     .filter-panel input { width: 160px; max-width: 100%; }
+    .filter-panel .clear-filters { align-self: end; padding: 7px 12px; border-radius: 8px; font-size: 12px; white-space: nowrap; box-shadow: none; }
     .kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
     .kpi { padding: 18px; border-radius: 22px; background: var(--card); border: 1px solid var(--line); display: flex; flex-direction: column; }
     .kpi > span:first-child { min-height: 46px; }
@@ -228,6 +229,7 @@
           <label class="filter-item"><span>Zone</span><select id="zoneFilter" onchange="onPeriodChange()" aria-label="Zone"></select></label>
           <label class="filter-item"><span>Division</span><select id="divisionFilter" onchange="onPeriodChange()" aria-label="Division"></select></label>
           <label class="filter-item"><span>Search districts</span><input id="searchBox" type="search" placeholder="Search district" oninput="render()"></label>
+          <button class="clear-filters" type="button" onclick="clearFilters()" aria-label="Clear all filters">Clear Filters</button>
         </div>
       </div>
 
@@ -437,6 +439,8 @@
           state.allRows = data.rows || [];
           applyRowFilters();
           state.years = data.years || [];
+          state.defaultYear = data.defaultYear;
+          state.defaultMonth = data.defaultMonth;
           populatePeriodFilters(data.defaultYear, data.defaultMonth);
           populateZoneFilter();
           state.selected = topDistrictForPeriod() || districtRows()[0] || null;
@@ -653,6 +657,15 @@
           render();
         }
       }).catch(() => { /* keep embedded fallback */ });
+    }
+
+    function clearFilters() {
+      document.getElementById('zoneFilter').value = '';
+      document.getElementById('divisionFilter').value = '';
+      document.getElementById('searchBox').value = '';
+      populatePeriodFilters(state.defaultYear, state.defaultMonth);
+      document.getElementById('chartTooltip').style.display = 'none';
+      onPeriodChange();
     }
 
     function onPeriodChange() {
