@@ -52,7 +52,7 @@
   function toNumber(value) {
     var text = String(value == null ? '' : value).trim();
     if (!text || text === '-' || text === '#N/A') { return 0; }
-    var num = Number(text.replace(/,/g, ''));
+    var num = Number(text.replace(/\s*MT$/i, '').replace(/,/g, ''));
     return isFinite(num) ? num : 0;
   }
 

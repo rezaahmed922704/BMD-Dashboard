@@ -172,7 +172,7 @@ function normalizeZone_(value) {
 function parseSales_(value) {
   const text = String(value == null ? '' : value).trim();
   if (!text || text === '-' || text === '#N/A') return 0;
-  const sales = Number(text.replace(/,/g, ''));
+  const sales = Number(text.replace(/\s*MT$/i, '').replace(/,/g, ''));
   return isFinite(sales) ? sales : 0;
 }
 
