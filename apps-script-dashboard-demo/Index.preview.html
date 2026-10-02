@@ -213,12 +213,14 @@
       <div class="filters" style="justify-content:flex-start;margin-bottom:12px">
         <input id="csvFile" type="file" accept=".csv,text/csv" onchange="readCsvFile()">
         <label style="display:flex;align-items:center;gap:8px;color:var(--muted);font-weight:800"><input id="replaceData" type="checkbox" checked style="min-width:auto"> Replace current SalesData</label>
-        <button id="uploadCsvButton" class="success" onclick="uploadCsvData()" disabled>Upload To Sheet</button>
-       </div>
-       <textarea id="csvInput" oninput="syncCsvText()" placeholder="Paste CSV here with headers: Date,Year,Month,Zone,Districts,Dealer,Sales"></textarea>
-      <p id="uploadStatus" class="zero" style="margin:10px 0 0;font-weight:800"></p>
+        <button id="uploadCsvButton" class="success" onclick="uploadCsvData()" disabled>Upload CSV</button>
+        <button id="resetCsvButton" onclick="resetUploadedCsv()" style="display:none">Reset to published data</button>
+        </div>
+        <textarea id="csvInput" oninput="syncCsvText()" placeholder="Paste CSV here with headers: Date,Year,Month,Zone,Districts,Dealer,Sales"></textarea>
+        <p id="csvStorageNote" class="zero" style="display:none;margin:8px 0">Uploads are saved in this browser only. Other devices will continue to see the published data.</p>
+       <p id="uploadStatus" class="zero" style="margin:10px 0 0;font-weight:800"></p>
     </section>
-    <section id="loading" class="card loading">Loading Google Sheet data...</section>
+    <section id="loading" class="card loading">Loading sales data...</section>
 
       <div id="filterPanel" class="card panel filter-panel" style="display:none">
         <div class="filters">
@@ -374,7 +376,7 @@
     };
     let state = { rows: [], years: [], selected: null, scopeDistrict: null, map: null, geoLayer: null, geoJson: null, geoJsonLoading: false, geoJsonFailed: false, csvText: '', csvReading: false, csvUploading: false, dealerTooltipCache: {} };
 
-    window.addEventListener('load', () => { initLogo(); loadDivisionData(); loadData(); });
+    window.addEventListener('load', () => { initLogo(); initUploadMode(); loadDivisionData(); loadData(); });
 
     let chartResizeTimer = null;
     window.addEventListener('resize', () => {
@@ -458,6 +460,23 @@
       uploader.style.display = uploader.style.display === 'none' ? 'block' : 'none';
     }
 
+    function initUploadMode() {
+      if (window.dashboardCsvStorage !== 'browser') return;
+      document.getElementById('uploadCsvButton').textContent = 'Apply CSV in this browser';
+      document.getElementById('resetCsvButton').style.display = '';
+      document.getElementById('csvStorageNote').style.display = '';
+    }
+
+    function resetUploadedCsv() {
+      google.script.run
+        .withSuccessHandler(() => {
+          document.getElementById('uploadStatus').textContent = 'Published data restored in this browser.';
+          loadData();
+        })
+        .withFailureHandler(showError)
+        .resetCsvData();
+    }
+
      function readCsvFile() {
         const file = document.getElementById('csvFile').files[0];
         if (!file) return;
@@ -475,7 +494,7 @@
           const problems = checkCsvHeaders_(state.csvText.split('\n')[0] || '');
           status.textContent = problems.length
             ? `${file.name} loaded, but header problem: ${problems.join('; ')}`
-            : `${file.name} loaded (${state.csvText.length.toLocaleString('en-BD')} characters). Click Upload To Sheet.`;
+            : `${file.name} loaded (${state.csvText.length.toLocaleString('en-BD')} characters). Click ${document.getElementById('uploadCsvButton').textContent}.`;
         };
         reader.onerror = () => {
           state.csvReading = false;
@@ -521,13 +540,14 @@
       const replaceData = document.getElementById('replaceData').checked;
       state.csvUploading = true;
       document.getElementById('uploadCsvButton').disabled = true;
-      status.textContent = `Uploading ${text.length.toLocaleString('en-BD')} characters to Google Sheet...`;
+      status.textContent = `Processing ${text.length.toLocaleString('en-BD')} characters...`;
       hideError();
       google.script.run
         .withSuccessHandler(result => {
           state.csvUploading = false;
           syncCsvText();
-          status.textContent = `Imported ${result.importedRows.toLocaleString('en-BD')} rows. Total sheet rows: ${result.totalRows.toLocaleString('en-BD')}.`;
+          status.textContent = `Imported ${result.importedRows.toLocaleString('en-BD')} rows. Total rows: ${result.totalRows.toLocaleString('en-BD')}.` +
+            (result.storage === 'browser' ? ' Saved in this browser only.' : '');
           loadData();
         })
         .withFailureHandler(error => {
@@ -1038,7 +1058,8 @@
       const hasBaseYear = hasComparisonYear();
       const previousTotals = hasBaseYear ? monthlyTotals(selectedFromYear(), scopeDistricts, zone) : null;
 
-      const monthly = MONTHS.map((label, index) => ({ label, value: currentTotals[index] }));
+      const lastActualMonth = year === state.years[state.years.length - 1] ? latestMonthWithData(year) : 12;
+      const monthly = MONTHS.map((label, index) => ({ label, value: index < lastActualMonth ? currentTotals[index] : null }));
       const scopeText = district
         ? district
         : (search ? `Search "${search}" (${visibleDistricts.length})` : 'Total Sales');
@@ -1051,7 +1072,7 @@
 
       const growthRows = MONTHS.map((label, index) => ({
         label,
-        value: hasBaseYear ? growth(currentTotals[index], previousTotals[index]) : 0,
+        value: index < lastActualMonth ? (hasBaseYear ? growth(currentTotals[index], previousTotals[index]) : 0) : null,
         current: currentTotals[index]
       }));
       drawLineChart('growthChart', growthRows, { type: 'growth', labels: hasBaseYear, emptyText: hasBaseYear ? '' : '' });
@@ -1210,13 +1231,14 @@
       const scopeDistricts = state.scopeDistrict ? [state.scopeDistrict] : visibleDistricts;
       const palette = ['#195a9f', '#0f8b5f', '#8a98a3', '#7b5ea7'];
       const matrix = state.years.map(year => monthlyTotals(year, scopeDistricts, zone));
-      const forecast = forecast2026Monthly(matrix, state.years);
+      const forecastStart = Math.max(8, latestMonthWithData(2026));
+      const forecast = forecast2026Monthly(matrix, state.years, forecastStart);
       const series = state.years.map((year, index) => ({
         label: String(year),
         color: palette[index % palette.length],
         points: matrix[index].map((value, monthIndex) => {
-          const isForecast = Number(year) === 2026 && monthIndex >= 8;
-          if (isForecast) value = forecast[monthIndex - 8];
+          const isForecast = Number(year) === 2026 && monthIndex >= forecastStart;
+          if (isForecast) value = forecast[monthIndex];
           const hasBase = index > 0 && matrix[index - 1][monthIndex] !== 0;
           const previous = hasBase ? matrix[index - 1][monthIndex] : null;
           return { value, isForecast, hasBase, growth: hasBase ? growth(value, previous) : 0 };
@@ -1224,18 +1246,23 @@
       }));
       document.getElementById('yearlyMonthlyLegend').innerHTML = series
         .map(item => `<span><i style="background:${item.color}"></i>${item.label}</span>`)
-        .join('') + (state.years.some(year => Number(year) === 2026) ? '<span title="2025 monthly sales × (2026 Jan–Aug sales / 2025 Jan–Aug sales). If the prior-period base is unavailable, use the 2026 Jan–Aug monthly average.">┄ 2026 Sep–Dec Forecast (Jan–Aug trend)</span>' : '');
+        .join('') + (state.years.some(year => Number(year) === 2026) && forecastStart < 12
+          ? `<span title="2025 monthly sales × (2026 Jan–${MONTHS[forecastStart - 1]} sales / 2025 Jan–${MONTHS[forecastStart - 1]} sales). If the prior-period base is unavailable, use the 2026 Jan–${MONTHS[forecastStart - 1]} monthly average.">┄ 2026 ${MONTHS[forecastStart]}–Dec Forecast (Jan–${MONTHS[forecastStart - 1]} trend)</span>` : '');
       drawYearlyMonthlyChart('yearlyMonthlyChart', series, -1, scopeDistricts.length ? '' : 'No sales found for the current filters');
       renderSalesInsights(rows, matrix);
     }
 
-    function forecast2026Monthly(matrix, years) {
+    function latestMonthWithData(year) {
+      return (state.allRows || state.rows).reduce((latest, row) => row.year === year ? Math.max(latest, row.month) : latest, 0);
+    }
+
+    function forecast2026Monthly(matrix, years, actualMonths) {
       const current = matrix[years.findIndex(year => Number(year) === 2026)] || Array(12).fill(0);
       const previous = matrix[years.findIndex(year => Number(year) === 2025)] || Array(12).fill(0);
-      const currentYtd = current.slice(0, 8).reduce((sum, value) => sum + value, 0);
-      const previousYtd = previous.slice(0, 8).reduce((sum, value) => sum + value, 0);
-      return previous.slice(8, 12).map(value => Math.max(0,
-        previousYtd > 0 ? value * currentYtd / previousYtd : currentYtd / 8));
+      const currentYtd = current.slice(0, actualMonths).reduce((sum, value) => sum + value, 0);
+      const previousYtd = previous.slice(0, actualMonths).reduce((sum, value) => sum + value, 0);
+      return previous.map(value => Math.max(0,
+        previousYtd > 0 ? value * currentYtd / previousYtd : currentYtd / actualMonths));
     }
 
     function renderSalesInsights(rows, matrix) {
@@ -1251,10 +1278,10 @@
         return;
       }
 
-      const latestIndex = years.length - 1;
+      const latestIndex = years.indexOf(selectedYear());
       const latestYear = years[latestIndex];
-      const prevIndex = latestIndex - 1;
-      const hasBase = prevIndex >= 0;
+      const prevIndex = years.indexOf(selectedFromYear());
+      const hasBase = hasComparisonYear() && prevIndex >= 0;
       const prevYear = hasBase ? years[prevIndex] : null;
       const ytd = values => values.slice(0, month).reduce((sum, value) => sum + value, 0);
       const latestYtd = ytd(matrix[latestIndex]);
@@ -1706,7 +1733,7 @@
       const showLabels = options.labels === true;
       const formatValue = options.fullLabels ? taka : compact;
       const pad = { left: options.fullLabels ? 68 : 56, right: 20, top: showLabels ? 32 : 22, bottom: 42 };
-      const values = points.map(point => point.value || 0);
+      const values = points.filter(point => point.value !== null).map(point => point.value || 0);
       const min = options.type === 'growth' ? Math.min(-20, ...values) : 0;
       const max = Math.max(options.type === 'growth' ? 20 : 1, ...values) * 1.12;
       const plotW = width - pad.left - pad.right;
@@ -1740,12 +1767,23 @@
       }
 
       ctx.beginPath();
-      points.forEach((point, index) => index ? ctx.lineTo(x(index), y(point.value || 0)) : ctx.moveTo(x(index), y(point.value || 0)));
+      let hasPrevious = false;
+      points.forEach((point, index) => {
+        if (point.value === null) { hasPrevious = false; return; }
+        if (hasPrevious) ctx.lineTo(x(index), y(point.value || 0));
+        else ctx.moveTo(x(index), y(point.value || 0));
+        hasPrevious = true;
+      });
       ctx.strokeStyle = options.type === 'growth' ? '#195a9f' : '#0f8b5f';
       ctx.lineWidth = 3;
       ctx.stroke();
 
       points.forEach((point, index) => {
+        if (point.value === null) {
+          ctx.fillStyle = '#60717e';
+          ctx.fillText(point.label, x(index) - 10, height - 16);
+          return;
+        }
         const value = point.value || 0;
         const color = options.type === 'growth' ? pointColor(value) : '#195a9f';
         ctx.fillStyle = color;

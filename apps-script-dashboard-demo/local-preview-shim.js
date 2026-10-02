@@ -14,6 +14,55 @@
   var GEOJSON_REMOTE = 'https://geodata.ucdavis.edu/gadm/gadm4.1/json/gadm41_BGD_2.json';
   var MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   var cache = { text: null, rows: null };
+  var hosted = location.hostname.endsWith('.vercel.app');
+  var databasePromise = null;
+  window.dashboardCsvStorage = hosted ? 'browser' : 'server';
+
+  function uploadDatabase() {
+    if (databasePromise) { return databasePromise; }
+    databasePromise = new Promise(function (resolve, reject) {
+      if (!window.indexedDB) { reject(new Error('Browser storage is not available for CSV uploads.')); return; }
+      var request = indexedDB.open('bmd-dashboard-csv', 1);
+      request.onupgradeneeded = function () { request.result.createObjectStore('uploads'); };
+      request.onsuccess = function () { resolve(request.result); };
+      request.onerror = function () { reject(request.error); };
+    });
+    return databasePromise;
+  }
+
+  function savedRows() {
+    return uploadDatabase().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var request = db.transaction('uploads', 'readonly').objectStore('uploads').get('current');
+        request.onsuccess = function () { resolve(request.result || null); };
+        request.onerror = function () { reject(request.error); };
+      });
+    });
+  }
+
+  function storeRows(rows) {
+    return uploadDatabase().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var transaction = db.transaction('uploads', 'readwrite');
+        transaction.objectStore('uploads').put({ rows: rows, updatedAt: new Date().toISOString() }, 'current');
+        transaction.oncomplete = function () { resolve(); };
+        transaction.onerror = function () { reject(transaction.error); };
+        transaction.onabort = function () { reject(transaction.error); };
+      });
+    });
+  }
+
+  function clearSavedRows() {
+    return uploadDatabase().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var transaction = db.transaction('uploads', 'readwrite');
+        transaction.objectStore('uploads').delete('current');
+        transaction.oncomplete = function () { resolve(); };
+        transaction.onerror = function () { reject(transaction.error); };
+        transaction.onabort = function () { reject(transaction.error); };
+      });
+    });
+  }
 
   function parseCsv(text) {
     var rows = [];
@@ -66,6 +115,16 @@
   }
 
   function loadRows() {
+    if (hosted) {
+      return savedRows().catch(function () { return null; }).then(function (saved) {
+        if (saved && Array.isArray(saved.rows)) { return saved.rows; }
+        return loadBundledRows();
+      });
+    }
+    return loadBundledRows();
+  }
+
+  function loadBundledRows() {
     return fetch(CSV_URL + '?t=' + Date.now(), { cache: 'no-store' })
       .then(function (response) {
         if (!response.ok) { throw new Error('Could not load local CSV (' + response.status + ').'); }
@@ -169,6 +228,16 @@
       if (!parsed.length) {
         return Promise.reject(new Error('No data rows with a district name were found in the uploaded CSV.'));
       }
+      if (hosted) {
+        return (replaceData ? Promise.resolve([]) : loadRows()).then(function (existing) {
+          var rows = existing.concat(parsed);
+          return storeRows(rows).then(function () {
+            cache.text = null;
+            cache.rows = rows;
+            return { importedRows: parsed.length, totalRows: rows.length, parsedRows: parsed.length, storage: 'browser' };
+          });
+        });
+      }
       var url = UPLOAD_URL + '?file=' + encodeURIComponent(CSV_FILE) +
         '&mode=' + (replaceData ? 'replace' : 'append') + '&t=' + Date.now();
       return fetch(url, { method: 'POST', body: content, cache: 'no-store' })
@@ -199,6 +268,10 @@
             backup: payload.backup
           };
         });
+    },
+    resetCsvData: function () {
+      if (!hosted) { return Promise.reject(new Error('Browser CSV storage is only used on the hosted dashboard.')); }
+      return clearSavedRows();
     }
   };
 

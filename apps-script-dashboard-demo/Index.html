@@ -1037,7 +1037,8 @@
       const hasBaseYear = hasComparisonYear();
       const previousTotals = hasBaseYear ? monthlyTotals(selectedFromYear(), scopeDistricts, zone) : null;
 
-      const monthly = MONTHS.map((label, index) => ({ label, value: currentTotals[index] }));
+      const lastActualMonth = year === state.years[state.years.length - 1] ? latestMonthWithData(year) : 12;
+      const monthly = MONTHS.map((label, index) => ({ label, value: index < lastActualMonth ? currentTotals[index] : null }));
       const scopeText = district
         ? district
         : (search ? `Search "${search}" (${visibleDistricts.length})` : 'Total Sales');
@@ -1050,7 +1051,7 @@
 
       const growthRows = MONTHS.map((label, index) => ({
         label,
-        value: hasBaseYear ? growth(currentTotals[index], previousTotals[index]) : 0,
+        value: index < lastActualMonth ? (hasBaseYear ? growth(currentTotals[index], previousTotals[index]) : 0) : null,
         current: currentTotals[index]
       }));
       drawLineChart('growthChart', growthRows, { type: 'growth', labels: hasBaseYear, emptyText: hasBaseYear ? '' : '' });
@@ -1209,13 +1210,14 @@
       const scopeDistricts = state.scopeDistrict ? [state.scopeDistrict] : visibleDistricts;
       const palette = ['#195a9f', '#0f8b5f', '#8a98a3', '#7b5ea7'];
       const matrix = state.years.map(year => monthlyTotals(year, scopeDistricts, zone));
-      const forecast = forecast2026Monthly(matrix, state.years);
+      const forecastStart = Math.max(8, latestMonthWithData(2026));
+      const forecast = forecast2026Monthly(matrix, state.years, forecastStart);
       const series = state.years.map((year, index) => ({
         label: String(year),
         color: palette[index % palette.length],
         points: matrix[index].map((value, monthIndex) => {
-          const isForecast = Number(year) === 2026 && monthIndex >= 8;
-          if (isForecast) value = forecast[monthIndex - 8];
+          const isForecast = Number(year) === 2026 && monthIndex >= forecastStart;
+          if (isForecast) value = forecast[monthIndex];
           const hasBase = index > 0 && matrix[index - 1][monthIndex] !== 0;
           const previous = hasBase ? matrix[index - 1][monthIndex] : null;
           return { value, isForecast, hasBase, growth: hasBase ? growth(value, previous) : 0 };
@@ -1223,18 +1225,23 @@
       }));
       document.getElementById('yearlyMonthlyLegend').innerHTML = series
         .map(item => `<span><i style="background:${item.color}"></i>${item.label}</span>`)
-        .join('') + (state.years.some(year => Number(year) === 2026) ? '<span title="2025 monthly sales × (2026 Jan–Aug sales / 2025 Jan–Aug sales). If the prior-period base is unavailable, use the 2026 Jan–Aug monthly average.">┄ 2026 Sep–Dec Forecast (Jan–Aug trend)</span>' : '');
+        .join('') + (state.years.some(year => Number(year) === 2026) && forecastStart < 12
+          ? `<span title="2025 monthly sales × (2026 Jan–${MONTHS[forecastStart - 1]} sales / 2025 Jan–${MONTHS[forecastStart - 1]} sales). If the prior-period base is unavailable, use the 2026 Jan–${MONTHS[forecastStart - 1]} monthly average.">┄ 2026 ${MONTHS[forecastStart]}–Dec Forecast (Jan–${MONTHS[forecastStart - 1]} trend)</span>` : '');
       drawYearlyMonthlyChart('yearlyMonthlyChart', series, -1, scopeDistricts.length ? '' : 'No sales found for the current filters');
       renderSalesInsights(rows, matrix);
     }
 
-    function forecast2026Monthly(matrix, years) {
+    function latestMonthWithData(year) {
+      return (state.allRows || state.rows).reduce((latest, row) => row.year === year ? Math.max(latest, row.month) : latest, 0);
+    }
+
+    function forecast2026Monthly(matrix, years, actualMonths) {
       const current = matrix[years.findIndex(year => Number(year) === 2026)] || Array(12).fill(0);
       const previous = matrix[years.findIndex(year => Number(year) === 2025)] || Array(12).fill(0);
-      const currentYtd = current.slice(0, 8).reduce((sum, value) => sum + value, 0);
-      const previousYtd = previous.slice(0, 8).reduce((sum, value) => sum + value, 0);
-      return previous.slice(8, 12).map(value => Math.max(0,
-        previousYtd > 0 ? value * currentYtd / previousYtd : currentYtd / 8));
+      const currentYtd = current.slice(0, actualMonths).reduce((sum, value) => sum + value, 0);
+      const previousYtd = previous.slice(0, actualMonths).reduce((sum, value) => sum + value, 0);
+      return previous.map(value => Math.max(0,
+        previousYtd > 0 ? value * currentYtd / previousYtd : currentYtd / actualMonths));
     }
 
     function renderSalesInsights(rows, matrix) {
@@ -1250,10 +1257,10 @@
         return;
       }
 
-      const latestIndex = years.length - 1;
+      const latestIndex = years.indexOf(selectedYear());
       const latestYear = years[latestIndex];
-      const prevIndex = latestIndex - 1;
-      const hasBase = prevIndex >= 0;
+      const prevIndex = years.indexOf(selectedFromYear());
+      const hasBase = hasComparisonYear() && prevIndex >= 0;
       const prevYear = hasBase ? years[prevIndex] : null;
       const ytd = values => values.slice(0, month).reduce((sum, value) => sum + value, 0);
       const latestYtd = ytd(matrix[latestIndex]);
@@ -1705,7 +1712,7 @@
       const showLabels = options.labels === true;
       const formatValue = options.fullLabels ? taka : compact;
       const pad = { left: options.fullLabels ? 68 : 56, right: 20, top: showLabels ? 32 : 22, bottom: 42 };
-      const values = points.map(point => point.value || 0);
+      const values = points.filter(point => point.value !== null).map(point => point.value || 0);
       const min = options.type === 'growth' ? Math.min(-20, ...values) : 0;
       const max = Math.max(options.type === 'growth' ? 20 : 1, ...values) * 1.12;
       const plotW = width - pad.left - pad.right;
@@ -1739,12 +1746,23 @@
       }
 
       ctx.beginPath();
-      points.forEach((point, index) => index ? ctx.lineTo(x(index), y(point.value || 0)) : ctx.moveTo(x(index), y(point.value || 0)));
+      let hasPrevious = false;
+      points.forEach((point, index) => {
+        if (point.value === null) { hasPrevious = false; return; }
+        if (hasPrevious) ctx.lineTo(x(index), y(point.value || 0));
+        else ctx.moveTo(x(index), y(point.value || 0));
+        hasPrevious = true;
+      });
       ctx.strokeStyle = options.type === 'growth' ? '#195a9f' : '#0f8b5f';
       ctx.lineWidth = 3;
       ctx.stroke();
 
       points.forEach((point, index) => {
+        if (point.value === null) {
+          ctx.fillStyle = '#60717e';
+          ctx.fillText(point.label, x(index) - 10, height - 16);
+          return;
+        }
         const value = point.value || 0;
         const color = options.type === 'growth' ? pointColor(value) : '#195a9f';
         ctx.fillStyle = color;
